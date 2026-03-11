@@ -36,6 +36,20 @@ const ALL_SERVERS = [...SERVERS.main, ...SERVERS.havok, ...SERVERS.blast];
 const CASINHA_SERVERS = ['vision', 'starplay'];
 
 // ═══════════════════════════════════════════════════════════
+//  OPERATIONAL COSTS (FIXED)
+//  - per client
+// ═══════════════════════════════════════════════════════════
+
+const OP_COSTS = {
+  starplay: 2.50,
+  vision: 2.00,
+};
+
+function operationalCost(serverId) {
+  return parseFloat(OP_COSTS[serverId]) || 0;
+}
+
+// ═══════════════════════════════════════════════════════════
 //  STATE — persisted in localStorage
 // ═══════════════════════════════════════════════════════════
 
@@ -46,6 +60,10 @@ let state = {
   parceiros: [],   // { id, name, handle, lote, valor, date1, val1, date2, val2 }
   paineis:   {},   // { serverId: costPerUnit }
   casinhas:  {},   // { clientId: bool }
+
+  ui: {
+    selectedClientIds: [], // for batch delete
+  }
 };
 
 function loadState() {
@@ -54,6 +72,8 @@ function loadState() {
     if (raw) {
       const parsed = JSON.parse(raw);
       state = { ...state, ...parsed };
+      if (!state.ui) state.ui = { selectedClientIds: [] };
+      if (!Array.isArray(state.ui.selectedClientIds)) state.ui.selectedClientIds = [];
     }
   } catch (e) { console.warn('State load error:', e); }
 }
@@ -104,6 +124,10 @@ function serverCost(serverId) {
   return parseFloat(state.paineis[serverId]) || 0;
 }
 
+function totalCostPerClient(serverId) {
+  return serverCost(serverId) + operationalCost(serverId);
+}
+
 const FREQ_COLORS = {
   mensal:      'badge-blue',
   bimestral:   'badge-purple',
@@ -135,6 +159,10 @@ function safeIdFromNumericStr(s) {
   const id = (s || '').trim();
   if (!/^\d+$/.test(id)) return null;
   return id; // keep as string
+}
+
+function isIsoDate(d) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(d || '');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -289,8 +317,7 @@ function getFilteredClients() {
     if (dashFilters.server   && c.server !== dashFilters.server) return false;
     if (dashFilters.freq     && c.freq   !== dashFilters.freq)   return false;
 
-    const isISO = /^\d{4}-\d{2}-\d{2}$/.test(c.date);
-    if (isISO) {
+    if (isIsoDate(c.date)) {
       if (dashFilters.dateFrom && c.date < dashFilters.dateFrom) return false;
       if (dashFilters.dateTo   && c.date > dashFilters.dateTo)   return false;
     }
@@ -305,7 +332,7 @@ function renderDashboard() {
   let bruto = 0, custo = 0;
   clients.forEach(c => {
     bruto += parseFloat(c.value) || 0;
-    custo += serverCost(c.server);
+    custo += totalCostPerClient(c.server);
   });
   const liquido = bruto - custo;
 
@@ -359,7 +386,7 @@ function renderFreqDonut(clients) {
   const svg = document.getElementById('donut-svg');
   const legend = document.getElementById('donut-legend');
 
-  svg.querySelectorAll('path').forEach(p => p.remove());
+  svg.querySelectorAll('circle.slice').forEach(p => p.remove());
   document.getElementById('donut-center').textContent = total;
 
   if (!total) {
@@ -375,6 +402,7 @@ function renderFreqDonut(clients) {
     const pct = count / total;
     const dash = pct * circ;
     const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.classList.add('slice');
     circle.setAttribute('cx', cx);
     circle.setAttribute('cy', cy);
     circle.setAttribute('r', r);
@@ -406,7 +434,7 @@ function renderProfitTable(clients) {
     if (!serverData[c.server]) serverData[c.server] = { clients: 0, bruto: 0, custo: 0 };
     serverData[c.server].clients++;
     serverData[c.server].bruto += parseFloat(c.value) || 0;
-    serverData[c.server].custo += serverCost(c.server);
+    serverData[c.server].custo += totalCostPerClient(c.server);
   });
 
   const rows = Object.entries(serverData)
@@ -435,7 +463,7 @@ function renderProfitTable(clients) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  MOTOR SIGMA
+//  MOTOR SIGMA (unchanged from previous version)
 // ═══════════════════════════════════════════════════════════
 
 let motorParsed = [];
@@ -635,9 +663,7 @@ function parseBlock(lines, defaultServer) {
 
   if (!name || value === null) return null;
 
-  // IMPORTANT: legacy motor (4-line) does not include numeric id.
-  // We keep uid() here, but it won't affect your "listão" import.
-  // You asked numeric only — we enforce numeric for manual modal creation.
+  // legacy motor (4-line) has no numeric id
   return {
     id:     uid(),
     name:   capitalizeWords(name),
@@ -763,15 +789,33 @@ function clearMotor() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  CLIENTS
+//  CLIENTS (with batch delete + sorting)
 // ═══════════════════════════════════════════════════════════
 
-function renderClientes() {
+function isClientSelected(id) {
+  return state.ui.selectedClientIds.includes(id);
+}
+
+function setClientSelected(id, selected) {
+  const cur = new Set(state.ui.selectedClientIds);
+  if (selected) cur.add(id);
+  else cur.delete(id);
+  state.ui.selectedClientIds = Array.from(cur);
+  saveState();
+}
+
+function clearClientSelection() {
+  state.ui.selectedClientIds = [];
+  saveState();
+}
+
+function getVisibleClientList() {
   const search    = (document.getElementById('cl-search')?.value || '').toLowerCase();
   const serverF   = document.getElementById('cl-filter-server')?.value || '';
   const freqF     = document.getElementById('cl-filter-freq')?.value || '';
+  const sortMode  = document.getElementById('cl-sort')?.value || 'valor_desc';
 
-  const list = state.clientes.filter(c => {
+  let list = state.clientes.filter(c => {
     if (search) {
       const normalizedName   = normalizeStr(c.name);
       const normalizedSearch = normalizeStr(search);
@@ -782,9 +826,124 @@ function renderClientes() {
     return true;
   });
 
+  // sort
+  list = list.slice().sort((a, b) => {
+    const va = parseFloat(a.value) || 0;
+    const vb = parseFloat(b.value) || 0;
+
+    if (sortMode === 'valor_desc') return vb - va;
+    if (sortMode === 'valor_asc')  return va - vb;
+
+    if (sortMode === 'name_asc')   return normalizeStr(a.name).localeCompare(normalizeStr(b.name));
+    if (sortMode === 'name_desc')  return normalizeStr(b.name).localeCompare(normalizeStr(a.name));
+
+    // dates (fallback stable)
+    const da = isIsoDate(a.date) ? a.date : '';
+    const db = isIsoDate(b.date) ? b.date : '';
+    if (sortMode === 'date_desc')  return db.localeCompare(da);
+    if (sortMode === 'date_asc')   return da.localeCompare(db);
+
+    return 0;
+  });
+
+  return list;
+}
+
+function syncBatchUi(list) {
+  const badge = document.getElementById('cl-selected-badge');
+  const btn   = document.getElementById('btn-delete-selected');
+
+  // only count selected that exist
+  const existing = new Set(state.clientes.map(c => c.id));
+  const selected = state.ui.selectedClientIds.filter(id => existing.has(id));
+  state.ui.selectedClientIds = selected;
+
+  const count = selected.length;
+
+  if (!count) {
+    badge.style.display = 'none';
+    btn.style.display = 'none';
+  } else {
+    badge.style.display = 'inline-flex';
+    badge.textContent = `${count} selecionado${count !== 1 ? 's' : ''}`;
+    btn.style.display = 'flex';
+  }
+
+  // Select-all checkbox only for visible list
+  const selectAll = document.getElementById('cl-select-all');
+  if (selectAll) {
+    const visibleIds = list.map(c => c.id);
+    const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => state.ui.selectedClientIds.includes(id));
+    const noneVisibleSelected = visibleIds.every(id => !state.ui.selectedClientIds.includes(id));
+    selectAll.checked = allVisibleSelected;
+    selectAll.indeterminate = !allVisibleSelected && !noneVisibleSelected;
+  }
+
+  saveState();
+}
+
+function onClientRowCheckboxChange(id, checked) {
+  setClientSelected(id, checked);
+  renderClientes(); // re-render to keep select-all/indeterminate updated
+}
+
+function toggleSelectAllClients(checked) {
+  const visible = getVisibleClientList();
+  const ids = visible.map(c => c.id);
+  const cur = new Set(state.ui.selectedClientIds);
+
+  ids.forEach(id => {
+    if (checked) cur.add(id);
+    else cur.delete(id);
+  });
+
+  state.ui.selectedClientIds = Array.from(cur);
+  saveState();
+  renderClientes();
+}
+
+function confirmDeleteSelectedClients() {
+  const existing = new Set(state.clientes.map(c => c.id));
+  const selected = state.ui.selectedClientIds.filter(id => existing.has(id));
+
+  if (!selected.length) {
+    showToast('Nenhum cliente selecionado.', 'error');
+    return;
+  }
+
+  document.getElementById('confirm-message').textContent =
+    `Deseja realmente excluir este lote (${selected.length} cliente${selected.length !== 1 ? 's' : ''})? Esta ação não pode ser desfeita.`;
+
+  document.getElementById('confirm-btn').onclick = () => {
+    // delete
+    const delSet = new Set(selected);
+
+    state.clientes = state.clientes.filter(c => !delSet.has(c.id));
+    selected.forEach(id => delete state.casinhas[id]);
+
+    clearClientSelection();
+
+    saveState();
+    closeModal('modal-confirm');
+
+    renderClientes();
+    renderDashboard();
+    renderCasinhas();
+
+    showToast(`Lote excluído: ${selected.length} cliente${selected.length !== 1 ? 's' : ''}.`, 'info');
+  };
+
+  openModal('modal-confirm');
+}
+
+function renderClientes() {
+  const list = getVisibleClientList();
+
   const tbody = document.getElementById('clientes-table-body');
   const emptyEl = document.getElementById('clientes-empty');
   document.getElementById('cl-count-label').textContent = `${list.length} cliente${list.length !== 1 ? 's' : ''}`;
+
+  syncBatchUi(list);
 
   if (!list.length) {
     tbody.innerHTML = '';
@@ -797,8 +956,13 @@ function renderClientes() {
   tbody.innerHTML = list.map((c, idx) => {
     const srv = getServer(c.server);
     const freqClass = FREQ_COLORS[c.freq] || 'badge-gray';
+    const checked = isClientSelected(c.id);
+
     return `
       <tr>
+        <td>
+          <input type="checkbox" ${checked ? 'checked' : ''} onchange="onClientRowCheckboxChange('${c.id}', this.checked)" />
+        </td>
         <td class="td-muted">${idx + 1}</td>
         <td class="td-muted">${c.id || '—'}</td>
         <td><span class="font-bold">${c.name}</span></td>
@@ -829,8 +993,7 @@ function openClientModal(id) {
     document.getElementById('cl-form-server').value = c.server;
     document.getElementById('cl-form-valor').value  = c.value;
     document.getElementById('cl-form-freq').value   = c.freq;
-
-    document.getElementById('cl-form-date').value   = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : '';
+    document.getElementById('cl-form-date').value   = isIsoDate(c.date) ? c.date : '';
   } else {
     title.textContent = '➕ Novo Cliente';
     document.getElementById('cl-form-id').value     = '';
@@ -872,11 +1035,12 @@ function saveClient() {
   closeModal('modal-client');
   renderClientes();
   renderDashboard();
+  renderCasinhas();
   showToast(idx >= 0 ? 'Cliente atualizado!' : 'Cliente cadastrado!', 'success');
 }
 
 // ═══════════════════════════════════════════════════════════
-//  PARCEIROS (PARTNERS)
+//  PARCEIROS
 // ═══════════════════════════════════════════════════════════
 
 function renderParceiros() {
@@ -1093,7 +1257,7 @@ function toggleCasinha(clientId) {
   renderCasinhas();
 }
 
-// ══════════════════════════════��════════════════════════════
+// ═══════════════════════════════════════════════════════════
 //  PAINÉIS (SERVER COST CONFIG)
 // ═══════════════════════════════════════════════════════════
 
@@ -1127,6 +1291,7 @@ function renderPaineis() {
           </div>
           <div class="server-config-meta mt-1">
             <span class="text-xs text-secondary">${state.clientes.filter(c => c.server === s.id).length} clientes</span>
+            ${OP_COSTS[s.id] ? `<span class="badge badge-blue">Operacional: ${fmt(OP_COSTS[s.id])}/cliente</span>` : ''}
           </div>
         </div>`;
     }).join('');
@@ -1148,7 +1313,7 @@ function savePaineis() {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  DELETE (CONFIRM)
+//  DELETE (SINGLE)
 // ═══════════════════════════════════════════════════════════
 
 function confirmDelete(type, id, name) {
@@ -1157,9 +1322,14 @@ function confirmDelete(type, id, name) {
     if (type === 'client') {
       state.clientes = state.clientes.filter(c => c.id !== id);
       delete state.casinhas[id];
+
+      // also remove from selection if present
+      state.ui.selectedClientIds = state.ui.selectedClientIds.filter(x => x !== id);
+
       saveState();
       renderClientes();
       renderDashboard();
+      renderCasinhas();
       showToast('Cliente excluído.', 'info');
     } else if (type === 'partner') {
       state.parceiros = state.parceiros.filter(p => p.id !== id);
@@ -1180,19 +1350,23 @@ function exportCSV() {
   const clients = getFilteredClients();
   if (!clients.length) { showToast('Nenhum dado para exportar.', 'error'); return; }
 
-  const headers = ['ID', 'Nome', 'Painel', 'Valor (R$)', 'Frequência', 'Custo Licença', 'Lucro Líquido', 'Data'];
+  const headers = ['ID', 'Nome', 'Painel', 'Valor (R$)', 'Frequência', 'Custo Licença', 'Custo Operacional', 'Custo Total', 'Lucro Líquido', 'Data'];
   const rows = clients.map(c => {
     const srv  = getServer(c.server);
     const val  = parseFloat(c.value) || 0;
-    const cost = serverCost(c.server);
+    const lic  = serverCost(c.server);
+    const op   = operationalCost(c.server);
+    const tot  = lic + op;
     return [
       `"${c.id || ''}"`,
       `"${c.name}"`,
       `"${srv ? srv.name : c.server}"`,
       val.toFixed(2),
       c.freq,
-      cost.toFixed(2),
-      (val - cost).toFixed(2),
+      lic.toFixed(2),
+      op.toFixed(2),
+      tot.toFixed(2),
+      (val - tot).toFixed(2),
       fmtDate(c.date),
     ].join(',');
   });
@@ -1256,6 +1430,10 @@ function showToast(message, type = 'info') {
 function init() {
   loadState();
   populateServerSelects();
+
+  // default sort
+  const sortEl = document.getElementById('cl-sort');
+  if (sortEl && !sortEl.value) sortEl.value = 'valor_desc';
 
   document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
     el.addEventListener('click', () => navigateTo(el.dataset.tab));
