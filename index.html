@@ -72,11 +72,16 @@
 
     <div class="sidebar-footer">
       <div class="sidebar-footer-info">
-        <div class="footer-avatar">GI</div>
+        <div class="footer-avatar" id="footer-avatar">GI</div>
         <div class="footer-text">
-          <p>GERENCIADOR INTELIGENTE</p>
-          <span>● Sistema Online</span>
+          <p id="footer-user">GERENCIADOR INTELIGENTE</p>
+          <span id="footer-status">● Conectando...</span>
         </div>
+      </div>
+
+      <div style="display:flex; gap:.5rem; padding: .75rem .75rem 0;">
+        <button class="topbar-btn btn-outline" style="width:100%; justify-content:center" onclick="openAccountModal()">👤 Conta</button>
+        <button class="topbar-btn btn-danger" style="width:100%; justify-content:center" onclick="logout()">Sair</button>
       </div>
     </div>
   </aside>
@@ -501,6 +506,67 @@
 
 <!-- ══ MODALS ════════════════════════════════════════ -->
 
+<!-- Auth Modal -->
+<div class="modal-overlay open" id="modal-auth">
+  <div class="modal" style="max-width: 460px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">🔐 Entrar</div>
+        <div class="modal-subtitle">Acesse sua conta para carregar seus dados</div>
+      </div>
+      <button class="modal-close" onclick="noopAuthClose()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-field">
+          <label class="form-label">Email</label>
+          <input type="email" class="form-input" id="auth-email" placeholder="seuemail@dominio.com" />
+        </div>
+        <div class="form-field">
+          <label class="form-label">Senha</label>
+          <input type="password" class="form-input" id="auth-pass" placeholder="••••••••" />
+        </div>
+        <div class="form-hint" id="auth-hint">Use seu email/senha (Firebase Auth).</div>
+      </div>
+    </div>
+    <div class="modal-footer" style="justify-content: space-between">
+      <button class="topbar-btn btn-outline" onclick="register()">Criar conta</button>
+      <button class="topbar-btn btn-primary" onclick="login()">Entrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- Account Modal -->
+<div class="modal-overlay" id="modal-account">
+  <div class="modal" style="max-width: 520px">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title">👤 Conta</div>
+        <div class="modal-subtitle">Informações da sessão</div>
+      </div>
+      <button class="modal-close" onclick="closeModal('modal-account')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-field">
+          <label class="form-label">Usuário</label>
+          <input class="form-input" id="acc-user" disabled />
+        </div>
+        <div class="form-field">
+          <label class="form-label">UID</label>
+          <input class="form-input" id="acc-uid" disabled />
+        </div>
+      </div>
+      <div class="form-hint" style="margin-top:.75rem">
+        Seus dados estão em: <code>users/{uid}/state/main</code>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="topbar-btn btn-outline" onclick="closeModal('modal-account')">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <!-- Add/Edit Client Modal -->
 <div class="modal-overlay" id="modal-client">
   <div class="modal">
@@ -655,6 +721,6 @@
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 
-<script src="app.js"></script>
+<script type="module" src="app.js"></script>
 </body>
 </html>
