@@ -397,6 +397,7 @@ body {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 1.25rem;
+  gap: 1rem;
 }
 
 .card-title {
@@ -467,7 +468,7 @@ body {
 .filter-input:focus { border-color: var(--border-focus); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.1); }
 .filter-input::placeholder { color: var(--text-muted); }
 
-/* ── Table ─────────────────────────────────────────── */
+/* ── Table ─────────────────────────────────────��───── */
 .table-wrapper { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 
 table {
@@ -475,7 +476,7 @@ table {
   border-collapse: collapse;
 }
 
-.table-clientes { min-width: 860px; } /* keeps mobile smooth, scrollable instead of squished */
+.table-clientes { min-width: 920px; } /* grew because of checkbox column */
 
 thead th {
   text-align: left;
@@ -505,6 +506,13 @@ tbody td {
 }
 
 .td-muted { color: var(--text-secondary) !important; }
+
+/* checkboxes bigger */
+input[type="checkbox"]{
+  width: 16px;
+  height: 16px;
+  accent-color: var(--sky-blue);
+}
 
 /* ── Badges ────────────────────────────────────────── */
 .badge {
@@ -706,7 +714,7 @@ tbody td {
   max-width: 580px;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 25px 60px rgba(0, 0, 0,  0.6);
   animation: modalIn 0.22s ease;
 }
 
