@@ -79,11 +79,22 @@ function fmt(val) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val || 0);
 }
 
+/**
+ * Now supports both:
+ * - ISO 'YYYY-MM-DD' (legacy/manual inputs) => show 'DD/MM/YYYY'
+ * - BR  'DD/MM/YYYY' (Motor Sigma table import) => show as-is
+ */
 function fmtDate(dateStr) {
   if (!dateStr) return '—';
-  const [y, m, d] = dateStr.split('-');
-  if (!y || !m || !d) return dateStr;
-  return `${d}/${m}/${y}`;
+
+  // If already DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
+
+  // If ISO YYYY-MM-DD
+  const iso = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
+
+  return dateStr;
 }
 
 function today() {
@@ -115,6 +126,21 @@ const FREQ_LABELS = {
 };
 
 const SERVER_COLORS = ['#38bdf8','#34d399','#a78bfa','#fb7185','#fbbf24','#60a5fa','#f472b6','#4ade80','#818cf8','#f87171','#2dd4bf','#e879f9'];
+
+function normalizeStr(str) {
+  return (str || '')
+    .toString()
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+}
+
+function safeIdFromNumericStr(s) {
+  const id = (s || '').trim();
+  if (!/^\d+$/.test(id)) return null;
+  return id; // keep as string
+}
 
 // ═══════════════════════════════════════════════════════════
 //  NAVIGATION
@@ -210,12 +236,22 @@ function clearDashFilters() {
   renderDashboard();
 }
 
+/**
+ * Dashboard filters were designed for ISO YYYY-MM-DD.
+ * To keep backward compatibility, we still support filters when clients have ISO dates.
+ * For BR DD/MM/YYYY dates (imported), we don't filter by date range (unless you later switch to ISO).
+ */
 function getFilteredClients() {
   return state.clientes.filter(c => {
     if (dashFilters.server   && c.server !== dashFilters.server) return false;
     if (dashFilters.freq     && c.freq   !== dashFilters.freq)   return false;
-    if (dashFilters.dateFrom && c.date   <  dashFilters.dateFrom) return false;
-    if (dashFilters.dateTo   && c.date   >  dashFilters.dateTo)   return false;
+
+    const isISO = /^\d{4}-\d{2}-\d{2}$/.test(c.date);
+    if (isISO) {
+      if (dashFilters.dateFrom && c.date < dashFilters.dateFrom) return false;
+      if (dashFilters.dateTo   && c.date > dashFilters.dateTo)   return false;
+    }
+
     return true;
   });
 }
@@ -376,6 +412,14 @@ function runMotorSigma() {
   document.getElementById('motor-confirm-btn').style.display = 'none';
   document.getElementById('motor-count-badge').textContent = '0 detectados';
 
+  // If looks like the table export (contains multiple numeric IDs and keywords), parse as table blocks.
+  if (looksLikeTableDump(text)) {
+    motorParsed = parseTableDump(text, server);
+    finalizeMotor(server);
+    return;
+  }
+
+  // Legacy: 4 lines per client
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const blocks = [];
   for (let i = 0; i < lines.length; i += 4) {
@@ -416,6 +460,173 @@ function runMotorSigma() {
   processBlock(0);
 }
 
+function looksLikeTableDump(text) {
+  const t = normalizeStr(text);
+  // Heuristics: has 'plano:' and at least one numeric-only line and a 'criado em' marker
+  const hasPlano = t.includes('plano: r$');
+  const hasCriado = t.includes('criado em');
+  const hasNumericLine = text.split('\n').some(l => /^\s*\d{6,}\s*$/.test(l));
+  return hasPlano && (hasCriado || hasNumericLine);
+}
+
+/**
+ * Parse your pasted "table/listão" format:
+ * - Each client block starts with a numeric ID line.
+ * - Must contain "Plano: R$ ..." (otherwise ignored)
+ * - Date is the vencimento like "11/04/2026, 23:59:59" => store "11/04/2026"
+ * - Name comes from the first line after IPTV/TV (as you confirmed)
+ * - Freq from 📅 N MÊS/MÊSES/ANO or from the name/detail line ("Mensal/Trimestral/Anual")
+ * - Uses numeric ID as internal `id` (string)
+ */
+function parseTableDump(text, defaultServer) {
+  const rawLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+  // Split into blocks by numeric ID line
+  const blocks = [];
+  let current = null;
+
+  for (const line of rawLines) {
+    if (/^\d{6,}$/.test(line)) {
+      if (current) blocks.push(current);
+      current = { id: line, lines: [line] };
+      continue;
+    }
+    if (!current) continue;
+    current.lines.push(line);
+  }
+  if (current) blocks.push(current);
+
+  const parsed = [];
+
+  for (const b of blocks) {
+    const id = safeIdFromNumericStr(b.id);
+    if (!id) continue;
+
+    const entry = parseTableBlock(b.lines, id, defaultServer);
+    if (entry) parsed.push(entry);
+  }
+
+  return parsed;
+}
+
+function parseTableBlock(lines, userId, defaultServer) {
+  // Must contain a plan price line; otherwise ignore (your "B")
+  const planLine = lines.find(l => normalizeStr(l).startsWith('plano:'));
+  if (!planLine) return null;
+
+  const value = parsePlanValue(planLine);
+  if (value === null) return null;
+
+  const date = parseVencimentoDateFromBlock(lines);
+  if (!date) return null;
+
+  const { name, freqFromNameLine } = parseNameFromBlock(lines);
+
+  // Frequency: prefer 📅 line, else from name detail words
+  const freqFromCalendar = parseFreqFromCalendarLine(lines);
+  const freq = freqFromCalendar || freqFromNameLine || 'mensal';
+
+  if (!name) return null;
+
+  return {
+    id: userId, // internal id is numeric user id (string)
+    name: capitalizeWords(name),
+    date: date,             // DD/MM/YYYY
+    value: value,
+    freq: freq,
+    server: defaultServer || '',
+  };
+}
+
+function parsePlanValue(planLine) {
+  // "Plano: R$ 20,00"
+  const m = planLine.match(/Plano:\s*R\$\s*([\d\.\,]+)/i);
+  if (!m) return null;
+  return parseValue(m[1]);
+}
+
+function parseVencimentoDateFromBlock(lines) {
+  // find first "DD/MM/YYYY, HH:MM:SS" not preceded by "Criado em"
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+
+    const m = l.match(/(\d{2}\/\d{2}\/\d{4}),\s*\d{2}:\d{2}:\d{2}/);
+    if (!m) continue;
+
+    // Many blocks have:
+    // vencimento date
+    // "Criado em"
+    // created date
+    // We want the first date with time, which is the vencimento.
+    return m[1];
+  }
+  return null;
+}
+
+function parseNameFromBlock(lines) {
+  // Name is on the first line after IPTV/TV marker (as you confirmed).
+  // Example:
+  // IPTV
+  // Glauceane - 11/04/2026- Mensal
+  // ...
+  // or:
+  // TV
+  // Andre eletricista
+  let nameLine = '';
+  for (let i = 0; i < lines.length; i++) {
+    const l = normalizeStr(lines[i]);
+    if (l === 'iptv' || l === 'tv') {
+      nameLine = (lines[i + 1] || '').trim();
+      break;
+    }
+  }
+
+  if (!nameLine) return { name: '', freqFromNameLine: '' };
+
+  // Remove trailing details after first hyphen, if present
+  // "Glauceane - 11/04/2026- Mensal" => "Glauceane"
+  const beforeHyphen = nameLine.split('-')[0].trim();
+  const name = beforeHyphen || nameLine.trim();
+
+  // Try infer freq from nameLine
+  const s = normalizeStr(nameLine);
+  let freqFromNameLine = '';
+  if (s.includes('bimestral')) freqFromNameLine = 'bimestral';
+  else if (s.includes('trimestral') || s.includes('3 mes')) freqFromNameLine = 'trimestral';
+  else if (s.includes('semestral') || s.includes('6 mes')) freqFromNameLine = 'semestral';
+  else if (s.includes('anual') || s.includes('1 ano') || s.includes('2 ano')) freqFromNameLine = 'anual';
+  else if (s.includes('mensal') || s.includes('1 mes')) freqFromNameLine = 'mensal';
+
+  return { name, freqFromNameLine };
+}
+
+function parseFreqFromCalendarLine(lines) {
+  // "📅 1 MÊS - PACOTE COMPLETO"
+  const cal = lines.find(l => l.includes('📅'));
+  if (!cal) return '';
+
+  const s = normalizeStr(cal);
+
+  // Find N months/years
+  // examples: "1 mes", "2 meses", "3 meses", "6 meses", "1 ano"
+  const mMonths = s.match(/(\d+)\s*mes/);
+  if (mMonths) {
+    const n = parseInt(mMonths[1], 10);
+    if (n === 1) return 'mensal';
+    if (n === 2) return 'bimestral';
+    if (n === 3) return 'trimestral';
+    if (n === 6) return 'semestral';
+    // fallback: treat other as mensal
+    return 'mensal';
+  }
+
+  const mYears = s.match(/(\d+)\s*ano/);
+  if (mYears) return 'anual';
+
+  return '';
+}
+
+// Legacy 4-line format parser (kept)
 function parseBlock(lines, defaultServer) {
   if (lines.length < 3) return null;
 
@@ -436,36 +647,44 @@ function parseBlock(lines, defaultServer) {
   };
 }
 
+/**
+ * Legacy: returns ISO YYYY-MM-DD for DD/MM/YYYY (from motor 4-line input)
+ * We keep as-is for manual/motor classic.
+ * Table-dump import uses DD/MM/YYYY directly and doesn't pass here.
+ */
 function parseDate(str) {
   str = str.trim();
+
   // DD/MM/YYYY
   const m1 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m1) {
     const y = m1[3].length === 2 ? '20' + m1[3] : m1[3];
     return `${y}-${m1[2].padStart(2,'0')}-${m1[1].padStart(2,'0')}`;
   }
+
   // YYYY-MM-DD already
   const m2 = str.match(/^\d{4}-\d{2}-\d{2}$/);
   if (m2) return str;
+
   return null;
 }
 
 function parseValue(str) {
   str = str.trim().replace(/R\$\s*/i, '').trim();
+
   // Brazilian format: comma is decimal separator, dot is thousands separator
   // e.g. "1.200,50" → 1200.50
   if (str.includes(',')) {
     str = str.replace(/\./g, '').replace(',', '.');
   }
-  // else US/plain format: dot is decimal, e.g. "35.50" → 35.50
+
   const val = parseFloat(str);
   return isNaN(val) ? null : val;
 }
 
 function parseFreq(str) {
-  // Normalize to lowercase ASCII to handle Portuguese variations
-  // e.g. 'Mensal', 'mênsal', 'MENSAL' all resolve correctly
-  const s = str.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const s = normalizeStr(str);
+
   if (s.startsWith('bi'))  return 'bimestral';
   if (s.startsWith('tri')) return 'trimestral';
   if (s.startsWith('sem')) return 'semestral';
@@ -474,7 +693,7 @@ function parseFreq(str) {
 }
 
 function capitalizeWords(str) {
-  return str.replace(/\b\w/g, c => c.toUpperCase());
+  return (str || '').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function finalizeMotor(defaultServer) {
@@ -493,7 +712,10 @@ function finalizeMotor(defaultServer) {
     return `
       <div class="preview-card" id="pcard-${i}">
         <div class="preview-card-header">
-          <span class="preview-name">${c.name}</span>
+          <div style="display:flex; flex-direction:column; gap:.15rem;">
+            <span class="preview-name">${c.name}</span>
+            <span class="text-muted text-xs">🆔 ${c.id}</span>
+          </div>
           <span class="badge ${freqClass}">${FREQ_LABELS[c.freq] || c.freq}</span>
         </div>
         <div class="preview-meta">
@@ -516,16 +738,23 @@ function confirmMotorImport() {
     return;
   }
 
-  // Assign server to all parsed (override if not set)
+  // UPSERT by internal id (numeric)
   motorParsed.forEach(c => {
     c.server = server || c.server;
-    state.clientes.push(c);
+
+    const idx = state.clientes.findIndex(x => x.id === c.id);
+    if (idx >= 0) {
+      // keep casinha checkbox state tied to id (same id)
+      state.clientes[idx] = { ...state.clientes[idx], ...c };
+    } else {
+      state.clientes.push(c);
+    }
   });
 
   saveState();
   renderDashboard();
 
-  showToast(`🎉 ${motorParsed.length} clientes importados!`, 'success');
+  showToast(`🎉 ${motorParsed.length} clientes importados/atualizados!`, 'success');
 
   // Reset
   motorParsed = [];
@@ -557,9 +786,8 @@ function renderClientes() {
 
   let list = state.clientes.filter(c => {
     if (search) {
-      // Normalize both strings to allow accent-insensitive search (e.g. 'Jose' matches 'José')
-      const normalizedName   = c.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      const normalizedSearch = search.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const normalizedName   = normalizeStr(c.name);
+      const normalizedSearch = normalizeStr(search);
       if (!normalizedName.includes(normalizedSearch)) return false;
     }
     if (serverF  && c.server !== serverF) return false;
@@ -585,6 +813,7 @@ function renderClientes() {
     return `
       <tr>
         <td class="td-muted">${idx + 1}</td>
+        <td class="td-muted">${c.id || '—'}</td>
         <td><span class="font-bold">${c.name}</span></td>
         <td>${srv ? `<span class="badge badge-blue"><span class="server-dot" style="background:#38bdf8"></span>${srv.emoji} ${srv.name}</span>` : '<span class="text-muted">—</span>'}</td>
         <td class="font-bold text-sky">${fmt(c.value)}</td>
@@ -601,19 +830,24 @@ function renderClientes() {
 }
 
 function openClientModal(id) {
-  const modal = document.getElementById('modal-client');
   const title = document.getElementById('modal-client-title');
 
   if (id) {
     const c = state.clientes.find(x => x.id === id);
     if (!c) return;
     title.textContent = '✏️ Editar Cliente';
+
+    // IMPORTANT: `cl-form-id` is the internal id, now numeric string.
     document.getElementById('cl-form-id').value     = c.id;
     document.getElementById('cl-form-name').value   = c.name;
     document.getElementById('cl-form-server').value = c.server;
     document.getElementById('cl-form-valor').value  = c.value;
     document.getElementById('cl-form-freq').value   = c.freq;
-    document.getElementById('cl-form-date').value   = c.date;
+
+    // For manual edit form date input type=date expects ISO YYYY-MM-DD.
+    // If this record was imported with BR date DD/MM/YYYY, we can't set it in <input type="date"> safely.
+    // We'll leave it blank in this case.
+    document.getElementById('cl-form-date').value   = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : '';
   } else {
     title.textContent = '➕ Novo Cliente';
     document.getElementById('cl-form-id').value     = '';
@@ -628,7 +862,7 @@ function openClientModal(id) {
 }
 
 function saveClient() {
-  const id     = document.getElementById('cl-form-id').value;
+  const idRaw  = document.getElementById('cl-form-id').value.trim();
   const name   = document.getElementById('cl-form-name').value.trim();
   const server = document.getElementById('cl-form-server').value;
   const value  = parseFloat(document.getElementById('cl-form-valor').value);
@@ -639,18 +873,23 @@ function saveClient() {
   if (!server) { showToast('Selecione um painel.', 'error'); return; }
   if (isNaN(value) || value < 0) { showToast('Informe um valor válido.', 'error'); return; }
 
-  if (id) {
-    const idx = state.clientes.findIndex(c => c.id === id);
-    if (idx >= 0) state.clientes[idx] = { id, name, server, value, freq, date };
+  // If id was provided, use it. Otherwise generate a uuid (manual creation).
+  const entryId = idRaw || uid();
+
+  const entry = { id: entryId, name, server, value, freq, date };
+
+  const idx = state.clientes.findIndex(c => c.id === entryId);
+  if (idx >= 0) {
+    state.clientes[idx] = entry;
   } else {
-    state.clientes.push({ id: uid(), name, server, value, freq, date });
+    state.clientes.push(entry);
   }
 
   saveState();
   closeModal('modal-client');
   renderClientes();
   renderDashboard();
-  showToast(id ? 'Cliente atualizado!' : 'Cliente cadastrado!', 'success');
+  showToast(idx >= 0 ? 'Cliente atualizado!' : 'Cliente cadastrado!', 'success');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -829,7 +1068,6 @@ function renderCasinhas() {
   }
 
   container.innerHTML = allGroups.filter(g => g.clients.length > 0).map(g => {
-    const isCasinha = CASINHA_SERVERS.includes(g.srv.id);
     // Vision and Starplay have dedicated color themes; all other servers use the default (starplay/blue) style
     const cssClass  = g.srv.id === 'vision' ? 'vision' : 'starplay';
     const titleClass = g.srv.id === 'vision' ? 'vision' : 'starplay';
@@ -961,12 +1199,13 @@ function exportCSV() {
   const clients = getFilteredClients();
   if (!clients.length) { showToast('Nenhum dado para exportar.', 'error'); return; }
 
-  const headers = ['Nome', 'Painel', 'Valor (R$)', 'Frequência', 'Custo Licença', 'Lucro Líquido', 'Data Cadastro'];
+  const headers = ['ID', 'Nome', 'Painel', 'Valor (R$)', 'Frequência', 'Custo Licença', 'Lucro Líquido', 'Data'];
   const rows = clients.map(c => {
     const srv  = getServer(c.server);
     const val  = parseFloat(c.value) || 0;
     const cost = serverCost(c.server);
     return [
+      `"${c.id || ''}"`,
       `"${c.name}"`,
       `"${srv ? srv.name : c.server}"`,
       val.toFixed(2),
