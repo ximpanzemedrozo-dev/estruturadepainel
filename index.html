@@ -216,7 +216,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">📊 Lucro Líquido por Painel</div>
-              <div class="card-subtitle">Receita bruta − custo de licença = lucro sigma real</div>
+              <div class="card-subtitle">Receita bruta − custo de licença − custo operacional = lucro sigma real</div>
             </div>
           </div>
           <div class="table-wrapper">
@@ -344,6 +344,17 @@
               <option value="anual">Anual</option>
             </select>
           </div>
+          <div class="filter-group">
+            <span class="filter-label">Ordenar</span>
+            <select class="filter-select" id="cl-sort" onchange="renderClientes()">
+              <option value="valor_desc">Maior valor → menor</option>
+              <option value="valor_asc">Menor valor → maior</option>
+              <option value="date_desc">Mais novos → mais antigos</option>
+              <option value="date_asc">Mais antigos → mais novos</option>
+              <option value="name_asc">Nome A → Z</option>
+              <option value="name_desc">Nome Z → A</option>
+            </select>
+          </div>
         </div>
 
         <div class="card">
@@ -352,11 +363,23 @@
               <div class="card-title">👥 Clientes Cadastrados</div>
               <div class="card-subtitle" id="cl-count-label">0 clientes</div>
             </div>
+
+            <!-- batch actions -->
+            <div class="flex items-center gap-2">
+              <span class="badge badge-blue" id="cl-selected-badge" style="display:none">0 selecionados</span>
+              <button class="topbar-btn btn-danger" id="btn-delete-selected" onclick="confirmDeleteSelectedClients()" style="display:none">
+                🗑️ Excluir Selecionados
+              </button>
+            </div>
           </div>
+
           <div class="table-wrapper">
             <table class="table-clientes">
               <thead>
                 <tr>
+                  <th style="width:48px">
+                    <input type="checkbox" id="cl-select-all" onclick="toggleSelectAllClients(this.checked)" />
+                  </th>
                   <th>#</th>
                   <th>ID</th>
                   <th>Nome</th>
@@ -443,7 +466,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">ℹ️ Configuração de Custos</div>
-              <div class="card-subtitle">Defina o custo de licença mensal por painel. O sistema calcula automaticamente o Lucro Sigma Real.</div>
+              <div class="card-subtitle">Defina o custo de licença mensal por painel. O sistema calcula automaticamente o Lucro Sigma Real (licença + operacional).</div>
             </div>
             <button class="topbar-btn btn-primary" onclick="savePaineis()">💾 Salvar Configurações</button>
           </div>
