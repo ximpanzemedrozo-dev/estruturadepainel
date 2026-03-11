@@ -69,7 +69,10 @@ function saveState() {
 // ═══════════════════════════════════════════════════════════
 
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9) + Math.random().toString(36).slice(2, 9);
 }
 
 function fmt(val) {
@@ -448,12 +451,20 @@ function parseDate(str) {
 }
 
 function parseValue(str) {
-  str = str.trim().replace(/R\$\s*/i, '').replace(/\./g, '').replace(',', '.').trim();
+  str = str.trim().replace(/R\$\s*/i, '').trim();
+  // Brazilian format: comma is decimal separator, dot is thousands separator
+  // e.g. "1.200,50" → 1200.50
+  if (str.includes(',')) {
+    str = str.replace(/\./g, '').replace(',', '.');
+  }
+  // else US/plain format: dot is decimal, e.g. "35.50" → 35.50
   const val = parseFloat(str);
   return isNaN(val) ? null : val;
 }
 
 function parseFreq(str) {
+  // Normalize to lowercase ASCII to handle Portuguese variations
+  // e.g. 'Mensal', 'mênsal', 'MENSAL' all resolve correctly
   const s = str.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   if (s.startsWith('bi'))  return 'bimestral';
   if (s.startsWith('tri')) return 'trimestral';
@@ -545,7 +556,12 @@ function renderClientes() {
   const freqF     = document.getElementById('cl-filter-freq')?.value || '';
 
   let list = state.clientes.filter(c => {
-    if (search   && !c.name.toLowerCase().includes(search)) return false;
+    if (search) {
+      // Normalize both strings to allow accent-insensitive search (e.g. 'Jose' matches 'José')
+      const normalizedName   = c.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const normalizedSearch = search.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (!normalizedName.includes(normalizedSearch)) return false;
+    }
     if (serverF  && c.server !== serverF) return false;
     if (freqF    && c.freq   !== freqF)   return false;
     return true;
@@ -814,8 +830,9 @@ function renderCasinhas() {
 
   container.innerHTML = allGroups.filter(g => g.clients.length > 0).map(g => {
     const isCasinha = CASINHA_SERVERS.includes(g.srv.id);
-    const cssClass  = g.srv.id === 'vision' ? 'vision' : g.srv.id === 'starplay' ? 'starplay' : 'starplay';
-    const titleClass = isCasinha ? g.srv.id : 'starplay';
+    // Vision and Starplay have dedicated color themes; all other servers use the default (starplay/blue) style
+    const cssClass  = g.srv.id === 'vision' ? 'vision' : 'starplay';
+    const titleClass = g.srv.id === 'vision' ? 'vision' : 'starplay';
 
     const paidClients = g.clients.filter(c => state.casinhas[c.id]);
     const totalVal = g.clients.reduce((s, c) => s + (parseFloat(c.value) || 0), 0);
