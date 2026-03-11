@@ -1,5 +1,5 @@
 /**
- * SIGMA PRO — Elite Master Management
+ * GERENCIADOR INTELIGENTE
  * Core Application Logic
  */
 
@@ -80,20 +80,15 @@ function fmt(val) {
 }
 
 /**
- * Now supports both:
- * - ISO 'YYYY-MM-DD' (legacy/manual inputs) => show 'DD/MM/YYYY'
- * - BR  'DD/MM/YYYY' (Motor Sigma table import) => show as-is
+ * Supports:
+ * - ISO 'YYYY-MM-DD' => show 'DD/MM/YYYY'
+ * - BR  'DD/MM/YYYY' => show as-is
  */
 function fmtDate(dateStr) {
   if (!dateStr) return '—';
-
-  // If already DD/MM/YYYY
   if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
-
-  // If ISO YYYY-MM-DD
   const iso = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
-
   return dateStr;
 }
 
@@ -143,6 +138,38 @@ function safeIdFromNumericStr(s) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  SIDEBAR (MOBILE)
+// ═══════════════════════════════════════════════════════════
+
+function openSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (!sidebar || !overlay) return;
+  sidebar.classList.add('open');
+  overlay.classList.add('open');
+}
+
+function closeSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (!sidebar || !overlay) return;
+  sidebar.classList.remove('open');
+  overlay.classList.remove('open');
+}
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  if (sidebar.classList.contains('open')) closeSidebar();
+  else openSidebar();
+}
+
+// Close sidebar on ESC
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeSidebar();
+});
+
+// ═══════════════════════════════════════════════════════════
 //  NAVIGATION
 // ═══════════════════════════════════════════════════════════
 
@@ -155,13 +182,31 @@ const PAGE_META = {
   paineis:   { title: 'Painéis',       subtitle: 'Configuração de custos por servidor' },
 };
 
+function syncTopbarTitles(meta) {
+  // mobile ids
+  const t = document.getElementById('page-title');
+  const s = document.getElementById('page-subtitle');
+
+  // desktop ids
+  const td = document.getElementById('page-title-desktop');
+  const sd = document.getElementById('page-subtitle-desktop');
+
+  if (t)  t.textContent  = meta.title || '';
+  if (s)  s.textContent  = meta.subtitle || '';
+  if (td) td.textContent = meta.title || '';
+  if (sd) sd.textContent = meta.subtitle || '';
+}
+
 function navigateTo(tab) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
   document.querySelectorAll('.tab-view').forEach(el => el.classList.toggle('active', el.id === `tab-${tab}`));
   const meta = PAGE_META[tab] || {};
-  document.getElementById('page-title').textContent   = meta.title   || tab;
-  document.getElementById('page-subtitle').textContent = meta.subtitle || '';
+  syncTopbarTitles(meta);
   renderTopbarActions(tab);
+
+  // Close sidebar on mobile after navigation
+  closeSidebar();
+
   if (tab === 'dashboard') renderDashboard();
   if (tab === 'clientes')  renderClientes();
   if (tab === 'parceiros') renderParceiros();
@@ -171,7 +216,9 @@ function navigateTo(tab) {
 
 function renderTopbarActions(tab) {
   const container = document.getElementById('topbar-actions');
+  if (!container) return;
   container.innerHTML = '';
+
   if (tab === 'clientes') {
     container.innerHTML = `<button class="topbar-btn btn-primary" onclick="openClientModal()">＋ Novo Cliente</button>`;
   } else if (tab === 'parceiros') {
@@ -196,6 +243,7 @@ function populateServerSelects() {
   selects.forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
+
     const isFilter = id.startsWith('dash-filter') || id.startsWith('cl-filter');
     el.innerHTML = isFilter ? '<option value="">Todos</option>' : '<option value="">— Selecione —</option>';
 
@@ -236,11 +284,6 @@ function clearDashFilters() {
   renderDashboard();
 }
 
-/**
- * Dashboard filters were designed for ISO YYYY-MM-DD.
- * To keep backward compatibility, we still support filters when clients have ISO dates.
- * For BR DD/MM/YYYY dates (imported), we don't filter by date range (unless you later switch to ISO).
- */
 function getFilteredClients() {
   return state.clientes.filter(c => {
     if (dashFilters.server   && c.server !== dashFilters.server) return false;
@@ -271,7 +314,6 @@ function renderDashboard() {
   document.getElementById('kpi-custo').textContent    = fmt(custo);
   document.getElementById('kpi-clientes').textContent = clients.length;
 
-  // Badge updates
   document.getElementById('badge-clientes').textContent  = state.clientes.length;
   document.getElementById('badge-parceiros').textContent = state.parceiros.length;
 
@@ -283,12 +325,10 @@ function renderDashboard() {
 function renderServerBarChart(clients) {
   const container = document.getElementById('chart-servers');
 
-  // Aggregate revenue by server
   const serverRevenue = {};
   ALL_SERVERS.forEach(s => { serverRevenue[s.id] = 0; });
   clients.forEach(c => { serverRevenue[c.server] = (serverRevenue[c.server] || 0) + (parseFloat(c.value) || 0); });
 
-  // Only servers with data
   const active = ALL_SERVERS.filter(s => serverRevenue[s.id] > 0);
   if (!active.length) {
     container.innerHTML = `<div class="empty-state" style="flex:1"><div class="empty-icon">📊</div><div class="empty-title">Sem dados</div></div>`;
@@ -319,7 +359,6 @@ function renderFreqDonut(clients) {
   const svg = document.getElementById('donut-svg');
   const legend = document.getElementById('donut-legend');
 
-  // Remove old paths
   svg.querySelectorAll('path').forEach(p => p.remove());
   document.getElementById('donut-center').textContent = total;
 
@@ -412,14 +451,12 @@ function runMotorSigma() {
   document.getElementById('motor-confirm-btn').style.display = 'none';
   document.getElementById('motor-count-badge').textContent = '0 detectados';
 
-  // If looks like the table export (contains multiple numeric IDs and keywords), parse as table blocks.
   if (looksLikeTableDump(text)) {
     motorParsed = parseTableDump(text, server);
     finalizeMotor(server);
     return;
   }
 
-  // Legacy: 4 lines per client
   const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const blocks = [];
   for (let i = 0; i < lines.length; i += 4) {
@@ -432,7 +469,6 @@ function runMotorSigma() {
     return;
   }
 
-  // Show progress
   const progressEl = document.getElementById('motor-progress');
   progressEl.classList.add('visible');
 
@@ -462,26 +498,15 @@ function runMotorSigma() {
 
 function looksLikeTableDump(text) {
   const t = normalizeStr(text);
-  // Heuristics: has 'plano:' and at least one numeric-only line and a 'criado em' marker
   const hasPlano = t.includes('plano: r$');
   const hasCriado = t.includes('criado em');
   const hasNumericLine = text.split('\n').some(l => /^\s*\d{6,}\s*$/.test(l));
   return hasPlano && (hasCriado || hasNumericLine);
 }
 
-/**
- * Parse your pasted "table/listão" format:
- * - Each client block starts with a numeric ID line.
- * - Must contain "Plano: R$ ..." (otherwise ignored)
- * - Date is the vencimento like "11/04/2026, 23:59:59" => store "11/04/2026"
- * - Name comes from the first line after IPTV/TV (as you confirmed)
- * - Freq from 📅 N MÊS/MÊSES/ANO or from the name/detail line ("Mensal/Trimestral/Anual")
- * - Uses numeric ID as internal `id` (string)
- */
 function parseTableDump(text, defaultServer) {
   const rawLines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
 
-  // Split into blocks by numeric ID line
   const blocks = [];
   let current = null;
 
@@ -510,7 +535,6 @@ function parseTableDump(text, defaultServer) {
 }
 
 function parseTableBlock(lines, userId, defaultServer) {
-  // Must contain a plan price line; otherwise ignore (your "B")
   const planLine = lines.find(l => normalizeStr(l).startsWith('plano:'));
   if (!planLine) return null;
 
@@ -522,16 +546,15 @@ function parseTableBlock(lines, userId, defaultServer) {
 
   const { name, freqFromNameLine } = parseNameFromBlock(lines);
 
-  // Frequency: prefer 📅 line, else from name detail words
   const freqFromCalendar = parseFreqFromCalendarLine(lines);
   const freq = freqFromCalendar || freqFromNameLine || 'mensal';
 
   if (!name) return null;
 
   return {
-    id: userId, // internal id is numeric user id (string)
+    id: userId,
     name: capitalizeWords(name),
-    date: date,             // DD/MM/YYYY
+    date: date, // DD/MM/YYYY
     value: value,
     freq: freq,
     server: defaultServer || '',
@@ -539,39 +562,22 @@ function parseTableBlock(lines, userId, defaultServer) {
 }
 
 function parsePlanValue(planLine) {
-  // "Plano: R$ 20,00"
   const m = planLine.match(/Plano:\s*R\$\s*([\d\.\,]+)/i);
   if (!m) return null;
   return parseValue(m[1]);
 }
 
 function parseVencimentoDateFromBlock(lines) {
-  // find first "DD/MM/YYYY, HH:MM:SS" not preceded by "Criado em"
   for (let i = 0; i < lines.length; i++) {
     const l = lines[i];
-
     const m = l.match(/(\d{2}\/\d{2}\/\d{4}),\s*\d{2}:\d{2}:\d{2}/);
     if (!m) continue;
-
-    // Many blocks have:
-    // vencimento date
-    // "Criado em"
-    // created date
-    // We want the first date with time, which is the vencimento.
     return m[1];
   }
   return null;
 }
 
 function parseNameFromBlock(lines) {
-  // Name is on the first line after IPTV/TV marker (as you confirmed).
-  // Example:
-  // IPTV
-  // Glauceane - 11/04/2026- Mensal
-  // ...
-  // or:
-  // TV
-  // Andre eletricista
   let nameLine = '';
   for (let i = 0; i < lines.length; i++) {
     const l = normalizeStr(lines[i]);
@@ -583,12 +589,9 @@ function parseNameFromBlock(lines) {
 
   if (!nameLine) return { name: '', freqFromNameLine: '' };
 
-  // Remove trailing details after first hyphen, if present
-  // "Glauceane - 11/04/2026- Mensal" => "Glauceane"
   const beforeHyphen = nameLine.split('-')[0].trim();
   const name = beforeHyphen || nameLine.trim();
 
-  // Try infer freq from nameLine
   const s = normalizeStr(nameLine);
   let freqFromNameLine = '';
   if (s.includes('bimestral')) freqFromNameLine = 'bimestral';
@@ -601,14 +604,11 @@ function parseNameFromBlock(lines) {
 }
 
 function parseFreqFromCalendarLine(lines) {
-  // "📅 1 MÊS - PACOTE COMPLETO"
   const cal = lines.find(l => l.includes('📅'));
   if (!cal) return '';
 
   const s = normalizeStr(cal);
 
-  // Find N months/years
-  // examples: "1 mes", "2 meses", "3 meses", "6 meses", "1 ano"
   const mMonths = s.match(/(\d+)\s*mes/);
   if (mMonths) {
     const n = parseInt(mMonths[1], 10);
@@ -616,7 +616,6 @@ function parseFreqFromCalendarLine(lines) {
     if (n === 2) return 'bimestral';
     if (n === 3) return 'trimestral';
     if (n === 6) return 'semestral';
-    // fallback: treat other as mensal
     return 'mensal';
   }
 
@@ -626,7 +625,6 @@ function parseFreqFromCalendarLine(lines) {
   return '';
 }
 
-// Legacy 4-line format parser (kept)
 function parseBlock(lines, defaultServer) {
   if (lines.length < 3) return null;
 
@@ -637,6 +635,9 @@ function parseBlock(lines, defaultServer) {
 
   if (!name || value === null) return null;
 
+  // IMPORTANT: legacy motor (4-line) does not include numeric id.
+  // We keep uid() here, but it won't affect your "listão" import.
+  // You asked numeric only — we enforce numeric for manual modal creation.
   return {
     id:     uid(),
     name:   capitalizeWords(name),
@@ -647,22 +648,15 @@ function parseBlock(lines, defaultServer) {
   };
 }
 
-/**
- * Legacy: returns ISO YYYY-MM-DD for DD/MM/YYYY (from motor 4-line input)
- * We keep as-is for manual/motor classic.
- * Table-dump import uses DD/MM/YYYY directly and doesn't pass here.
- */
 function parseDate(str) {
   str = str.trim();
 
-  // DD/MM/YYYY
   const m1 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if (m1) {
     const y = m1[3].length === 2 ? '20' + m1[3] : m1[3];
     return `${y}-${m1[2].padStart(2,'0')}-${m1[1].padStart(2,'0')}`;
   }
 
-  // YYYY-MM-DD already
   const m2 = str.match(/^\d{4}-\d{2}-\d{2}$/);
   if (m2) return str;
 
@@ -671,13 +665,9 @@ function parseDate(str) {
 
 function parseValue(str) {
   str = str.trim().replace(/R\$\s*/i, '').trim();
-
-  // Brazilian format: comma is decimal separator, dot is thousands separator
-  // e.g. "1.200,50" → 1200.50
   if (str.includes(',')) {
     str = str.replace(/\./g, '').replace(',', '.');
   }
-
   const val = parseFloat(str);
   return isNaN(val) ? null : val;
 }
@@ -738,13 +728,11 @@ function confirmMotorImport() {
     return;
   }
 
-  // UPSERT by internal id (numeric)
   motorParsed.forEach(c => {
     c.server = server || c.server;
 
     const idx = state.clientes.findIndex(x => x.id === c.id);
     if (idx >= 0) {
-      // keep casinha checkbox state tied to id (same id)
       state.clientes[idx] = { ...state.clientes[idx], ...c };
     } else {
       state.clientes.push(c);
@@ -756,7 +744,6 @@ function confirmMotorImport() {
 
   showToast(`🎉 ${motorParsed.length} clientes importados/atualizados!`, 'success');
 
-  // Reset
   motorParsed = [];
   document.getElementById('motor-input').value = '';
   document.getElementById('motor-preview-list').innerHTML = `<div class="empty-state"><div class="empty-icon">✅</div><div class="empty-title">Importação concluída</div><div class="empty-sub">${state.clientes.length} clientes na base</div></div>`;
@@ -784,7 +771,7 @@ function renderClientes() {
   const serverF   = document.getElementById('cl-filter-server')?.value || '';
   const freqF     = document.getElementById('cl-filter-freq')?.value || '';
 
-  let list = state.clientes.filter(c => {
+  const list = state.clientes.filter(c => {
     if (search) {
       const normalizedName   = normalizeStr(c.name);
       const normalizedSearch = normalizeStr(search);
@@ -837,16 +824,12 @@ function openClientModal(id) {
     if (!c) return;
     title.textContent = '✏️ Editar Cliente';
 
-    // IMPORTANT: `cl-form-id` is the internal id, now numeric string.
     document.getElementById('cl-form-id').value     = c.id;
     document.getElementById('cl-form-name').value   = c.name;
     document.getElementById('cl-form-server').value = c.server;
     document.getElementById('cl-form-valor').value  = c.value;
     document.getElementById('cl-form-freq').value   = c.freq;
 
-    // For manual edit form date input type=date expects ISO YYYY-MM-DD.
-    // If this record was imported with BR date DD/MM/YYYY, we can't set it in <input type="date"> safely.
-    // We'll leave it blank in this case.
     document.getElementById('cl-form-date').value   = /^\d{4}-\d{2}-\d{2}$/.test(c.date) ? c.date : '';
   } else {
     title.textContent = '➕ Novo Cliente';
@@ -869,16 +852,16 @@ function saveClient() {
   const freq   = document.getElementById('cl-form-freq').value;
   const date   = document.getElementById('cl-form-date').value || today();
 
+  if (!idRaw) { showToast('Informe o ID numérico do cliente.', 'error'); return; }
+  if (!/^\d+$/.test(idRaw)) { showToast('O ID deve conter apenas números (ex: 674029793).', 'error'); return; }
+
   if (!name)   { showToast('Informe o nome do cliente.', 'error'); return; }
   if (!server) { showToast('Selecione um painel.', 'error'); return; }
   if (isNaN(value) || value < 0) { showToast('Informe um valor válido.', 'error'); return; }
 
-  // If id was provided, use it. Otherwise generate a uuid (manual creation).
-  const entryId = idRaw || uid();
+  const entry = { id: idRaw, name, server, value, freq, date };
 
-  const entry = { id: entryId, name, server, value, freq, date };
-
-  const idx = state.clientes.findIndex(c => c.id === entryId);
+  const idx = state.clientes.findIndex(c => c.id === idRaw);
   if (idx >= 0) {
     state.clientes[idx] = entry;
   } else {
@@ -1035,7 +1018,6 @@ function renderCasinhas() {
     return { srv, clients };
   }).filter(g => g.srv);
 
-  // Also create "other servers" groups for all servers that have clients
   const otherIds = ALL_SERVERS
     .filter(s => !CASINHA_SERVERS.includes(s.id))
     .filter(s => state.clientes.some(c => c.server === s.id));
@@ -1068,7 +1050,6 @@ function renderCasinhas() {
   }
 
   container.innerHTML = allGroups.filter(g => g.clients.length > 0).map(g => {
-    // Vision and Starplay have dedicated color themes; all other servers use the default (starplay/blue) style
     const cssClass  = g.srv.id === 'vision' ? 'vision' : 'starplay';
     const titleClass = g.srv.id === 'vision' ? 'vision' : 'starplay';
 
@@ -1112,7 +1093,7 @@ function toggleCasinha(clientId) {
   renderCasinhas();
 }
 
-// ═══════════════════════════════════════════════════════════
+// ══════════════════════════════��════════════════════════════
 //  PAINÉIS (SERVER COST CONFIG)
 // ═══════════════════════════════════════════════════════════
 
@@ -1221,7 +1202,7 @@ function exportCSV() {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
-  a.download = `sigma_pro_${today()}.csv`;
+  a.download = `gerenciador_inteligente_${today()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
   showToast('CSV exportado com sucesso!', 'success');
@@ -1239,14 +1220,12 @@ function closeModal(id) {
   document.getElementById(id).classList.remove('open');
 }
 
-// Close modal on overlay click
 document.querySelectorAll('.modal-overlay').forEach(overlay => {
   overlay.addEventListener('click', e => {
     if (e.target === overlay) overlay.classList.remove('open');
   });
 });
 
-// ESC to close
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open'));
@@ -1278,12 +1257,10 @@ function init() {
   loadState();
   populateServerSelects();
 
-  // Navigation click handlers
   document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
     el.addEventListener('click', () => navigateTo(el.dataset.tab));
   });
 
-  // Render initial tab
   navigateTo('dashboard');
 }
 
